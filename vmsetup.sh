@@ -14,11 +14,23 @@ export LC_ALL=C
 if [[ ! -f $(which jq) ]]; then apt install jq -y; fi
  
 # template vm vars
-TEMPLATE_VMID="900"
-TEMPLATE_VMSTORAGE="local"
-SNIPPET_STORAGE="local"
-VMDISK_OPTIONS=",discard=on"
+DEFAULT_ID=900
+TEMPLATE_VMID=$DEFAULT_ID
+read -p "VM Template ID: ($DEFAULT_ID)" vmid
+if [ -n "$vmid" ] ; then
+   TEMPLATE_VMID="$vmid"
+fi
 
+TEMPLATE_VMSTORAGE="local-lvm"
+read -p "VM Storage ($TEMPLATE_VMSTORAGE)" vmstorage
+if [ -n "$vmstorage" ] ; then
+   TEMPLATE_VMSTORAGE="$vmstorage"
+fi
+
+SNIPPET_STORAGE="local"
+echo "Snippet storage is $SNIPPET_STORAGE. (else modify script)"
+
+VMDISK_OPTIONS=",discard=on"
 TEMPLATE_IGNITION="fcos-base-tmplt.yaml"
 
 # fcos version - stable, next, or testing
@@ -77,10 +89,11 @@ esac
 # download fcos vdisk
 [[ ! -e ${IMAGE_NAME} ]] && {
     echo "Download fedora coreos..."
-    wget -q --show-progress ${IMAGE_URL} -O ${IMAGE_NAME_XZ}
+    wget -c -q --show-progress ${IMAGE_URL} -O ${IMAGE_NAME_XZ}
     xz -dv ${IMAGE_NAME_XZ}
 }
 
+set -x
 # create a new VM
 echo "Create fedora coreos vm ${VMID}"
 qm create ${TEMPLATE_VMID} --name fcos-tmplt
@@ -95,7 +108,11 @@ qm set ${TEMPLATE_VMID} --memory 4096 \
 			--boot c --bootdisk scsi0
 
 template_vmcreated=$(date +%Y-%m-%d)
-qm set ${TEMPLATE_VMID} --description "Fedora CoreOS - Geco-iT Template
+qm set ${TEMPLATE_VMID} --description "Fedora CoreOS
+https://github.com/gunnarx/fedora-coreos-proxmox 
+forked from: https://github.com/windweaver828/fedora-coreos-proxmox (2024)
+forked from: https://github.com/GECO-IT/fedora-coreos-proxmox (2020)
+...
 
  - Version             : ${VERSION}
  - Cloud-init          : true
@@ -124,8 +141,36 @@ qm set ${TEMPLATE_VMID} --scsihw virtio-scsi-pci --scsi0 ${TEMPLATE_VMSTORAGE}:$
 # set hook-script
 qm set ${TEMPLATE_VMID} -hookscript ${SNIPPET_STORAGE}:snippets/hook-fcos.sh
 
-
-# convert vm template
+# convert to vm template
 echo -n "Convert VM ${TEMPLATE_VMID} in proxmox vm template... "
 qm template ${TEMPLATE_VMID} &> /dev/null || true
 echo "[done]"
+
+echo "VM template created."
+echo  
+echo "Now we should set the required vars, otherwise the pre-start hookscript (which runs on PVE host) will not succeed"
+echo
+read -p "Username (user):" user
+if [ -z "$user" ] ; then
+   echo "OK, using 'user' as username"
+   user=user
+fi
+read -s -p "Password for $user (no echo): " password
+
+echo "ssh-key via file-path: leave empty if you prefer to paste actual key"
+read -p "ssh-key path (optional)" sshkeypath
+if [ -z "$sshkeypath" ] ; then
+   echo "ssh-key (paste PUBLIC key, then CTRL-D):"
+   cat >/tmp/key.$$
+   sshkeypath=/tmp/key.$$
+fi
+
+qm set 900 --ciuser "$user"
+qm set 900 --cipassword "$password"
+qm set 900 --sshkeys "$sshkeypath"
+qm set 900 --ipconfig0 "ip=dhcp"
+
+echo
+echo "Variables have now been set to your given values."
+echo "To edit again go into PVE GUI and select the Cloud-Init section on the fcos-tmplt."
+echo "After cloning the template, it is also possible to set on the new VM before first boot"
